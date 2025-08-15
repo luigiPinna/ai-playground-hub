@@ -1,8 +1,0 @@
-transformers
-torch
-diffusers
-accelerate
-pillow
-tiktoken
-sentencepiece
-sacremoses
