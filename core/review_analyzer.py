@@ -1,7 +1,38 @@
-import json
+"""
+WORKFLOW SPIEGAZIONE - Booking Review Analyzer
+
+INPUT: Recensioni Booking con contenuto_positivo e contenuto_negativo separati
+
+STEP 1 - SENTIMENT ANALYSIS (LLM):
+- Usa modello HuggingFace per analizzare il sentiment di ogni parte
+- Risultato: POSITIVE/NEGATIVE/NEUTRAL + confidence score
+- Ci dice SE i clienti sono soddisfatti overall
+
+STEP 2 - KEYWORD EXTRACTION (KeyBERT):
+- Estrae le parole/frasi più significative da ogni parte
+- Positive keywords: cosa apprezzano (staff, piscina, colazione...)
+- Negative keywords: cosa criticano (affollata, lento, sporco...)
+- Ci dice COSA SPECIFICAMENTE apprezzano/criticano
+
+STEP 3 - CATEGORIZZAZIONE BUSINESS:
+- Associa keywords a categorie hotel (staff_service, facilities, room_quality...)
+- Conta menzioni per categoria per identificare pattern
+- Ci dice DOVE concentrare gli sforzi di miglioramento
+
+OUTPUT FINALE - BUSINESS INTELLIGENCE:
+- Summary: sentiment generale + percentuale positive
+- Strengths: punti di forza più menzionati (actionable per marketing)
+- Areas for improvement: problemi specifici da risolvere (actionable per management)
+- Detailed reviews: analisi granulare per ogni recensione
+
+VALORE: Il sentiment da solo dice "82% positive". Con keywords sappiamo che
+"i clienti amano lo staff (15 menzioni) ma si lamentano della piscina affollata (5 menzioni)"
+→ Azione concreta: gestire meglio accessi piscina in alta stagione
+"""
 import re
 from collections import defaultdict, Counter
 from transformers import pipeline
+from keybert import KeyBERT
 from constants import SAMPLE_REVIEWS
 
 
@@ -16,7 +47,11 @@ class BookingReviewAnalyzer:
             "sentiment-analysis",
             model="cardiffnlp/twitter-xlm-roberta-base-sentiment"
         )
-        print("Model loaded! Ready to analyze guest feedback 🏨")
+
+        print("Loading KeyBERT model for intelligent keyword extraction...")
+        self.kw_model = KeyBERT('distilbert-base-multilingual-cased')
+
+        print("Models loaded! Ready to analyze guest feedback 🏨")
 
         # Categories mapping for hospitality industry
         self.categories = {
@@ -54,17 +89,17 @@ class BookingReviewAnalyzer:
 
         result = self.sentiment_analyzer(text)
 
-        # Convert to human readable
+        # Better sentiment mapping for hospitality context
         sentiment_map = {
-            'LABEL_0': 'Very Negative',
-            'LABEL_1': 'Negative',
-            'LABEL_2': 'Neutral',
+            'LABEL_0': 'Negative',  # Very negative becomes negative
+            'LABEL_1': 'Negative',  # Negative stays negative
+            'LABEL_2': 'Neutral',  # Neutral stays neutral
             'POSITIVE': 'Positive',
             'NEGATIVE': 'Negative'
         }
 
         raw_label = result[0]['label']
-        sentiment = sentiment_map.get(raw_label, raw_label)
+        sentiment = sentiment_map.get(raw_label, 'Positive')  # Default to positive for unknown
         confidence = round(result[0]['score'], 3)
 
         return {"sentiment": sentiment, "confidence": confidence}
@@ -85,19 +120,69 @@ class BookingReviewAnalyzer:
 
         return list(set(mentioned_categories))  # Remove duplicates
 
-    def _extract_keywords(self, text):
-        """Extract relevant keywords from text"""
-        if not text:
+    def _extract_keywords(self, text, is_negative=False):
+        """
+        Extract relevant keywords using KeyBERT NLP model from Hugging Face.
+        Much more intelligent than regex-based extraction.
+        """
+        if not text or len(text.strip()) < 10:
             return []
 
-        # Simple keyword extraction - could be enhanced with more sophisticated NLP
+        try:
+            # Use KeyBERT to extract semantically meaningful keywords
+            # Simplified version without problematic parameters
+            keywords = self.kw_model.extract_keywords(
+                text,
+                keyphrase_ngram_range=(1, 2),  # Single words and 2-word phrases
+                use_maxsum=False,  # Disable MaxSum to simplify
+                nr_candidates=10  # Fewer candidates
+            )
+
+            # Extract just the keyword strings (not the scores)
+            keyword_list = [kw[0] for kw in keywords]
+
+            # Additional filtering for hospitality context
+            if is_negative:
+                # For negative reviews, focus on actionable issues
+                hospitality_issues = [
+                    'rumoroso', 'piccolo', 'affollata', 'disorganizzato', 'lento',
+                    'sporco', 'freddo', 'caldo', 'rotto', 'mancante', 'difficile'
+                ]
+                filtered_keywords = []
+                for kw in keyword_list:
+                    # Keep hospitality-specific issues or any 2-word phrases (more specific)
+                    if any(issue in kw.lower() for issue in hospitality_issues) or ' ' in kw:
+                        filtered_keywords.append(kw)
+                    # Also keep if it's a facility with problem context
+                    elif any(facility in kw.lower() for facility in
+                             ['piscina', 'colazione', 'camera', 'servizio', 'trasporto']):
+                        filtered_keywords.append(kw)
+
+                return filtered_keywords[:3]
+            else:
+                # For positive reviews, keep quality and facility keywords
+                return keyword_list[:5]
+
+        except Exception as e:
+            print(f"KeyBERT extraction failed: {e}")
+            # Fallback to simple extraction if KeyBERT fails
+            return self._simple_keyword_fallback(text, is_negative)
+
+    def _simple_keyword_fallback(self, text, is_negative):
+        """Fallback keyword extraction if KeyBERT fails"""
         words = re.findall(r'\b\w{4,}\b', text.lower())
 
-        # Filter out common words
-        stopwords = {'questo', 'quello', 'molto', 'tutto', 'sempre', 'anche', 'dalla', 'dalla', 'nella', 'della'}
-        keywords = [word for word in words if word not in stopwords]
+        # Enhanced stopwords for Italian
+        stopwords = {
+            'questo', 'quello', 'molto', 'tutto', 'sempre', 'anche', 'dalla',
+            'nella', 'della', 'delle', 'degli', 'sono', 'stata', 'stato',
+            'erano', 'aveva', 'avuto', 'fatto', 'dire', 'detto', 'bene',
+            'male', 'più', 'meno', 'come', 'quando', 'dove', 'cosa', 'che',
+            'nostro', 'vostra', 'essere', 'avere', 'fare', 'andare', 'venire'
+        }
 
-        return keywords[:5]  # Return top 5 keywords
+        keywords = [word for word in words if word not in stopwords and len(word) > 3]
+        return keywords[:5] if not is_negative else keywords[:3]
 
     def analyze_reviews(self, reviews_data):
         """
@@ -143,7 +228,7 @@ class BookingReviewAnalyzer:
                 categories = self._categorize_text(pos_content)
                 detailed_review["categories_mentioned"].extend(categories)
 
-                keywords = self._extract_keywords(pos_content)
+                keywords = self._extract_keywords(pos_content, is_negative=False)
                 detailed_review["key_strengths"] = keywords
                 all_positive_keywords.extend(keywords)
 
@@ -160,7 +245,7 @@ class BookingReviewAnalyzer:
                 detailed_review["negative_sentiment"] = neg_analysis["sentiment"]
                 all_sentiments.append(neg_analysis)
 
-                keywords = self._extract_keywords(neg_content)
+                keywords = self._extract_keywords(neg_content, is_negative=True)
                 detailed_review["key_issues"] = keywords
                 all_negative_keywords.extend(keywords)
             else:
@@ -170,7 +255,7 @@ class BookingReviewAnalyzer:
             detailed_review["categories_mentioned"] = list(set(detailed_review["categories_mentioned"]))
             results["detailed_reviews"].append(detailed_review)
 
-        # Calculate summary statistics
+        # Calculate summary statistics with original logic
         total_reviews = len(reviews_data)
         positive_reviews = sum(1 for r in results["detailed_reviews"] if r["negative_sentiment"] in ["None", "Neutral"])
 
@@ -195,9 +280,19 @@ class BookingReviewAnalyzer:
                     "confidence": round(avg_conf, 3)
                 }
 
-        # Generate insights
-        results["strengths"] = list(Counter(all_positive_keywords).most_common(5))
-        results["areas_for_improvement"] = list(Counter(all_negative_keywords).most_common(3))
+        # Generate better insights
+        # Top positive aspects (filter out generic words)
+        positive_counter = Counter(all_positive_keywords)
+        meaningful_strengths = [(k, v) for k, v in positive_counter.most_common(10)
+                                if len(k) > 3 and k not in ['tutto', 'molto', 'bene']]
+
+        # Real improvement areas from negative feedback
+        improvement_counter = Counter(all_negative_keywords)
+        real_issues = [(k, v) for k, v in improvement_counter.most_common(5)
+                       if v > 0 and k not in ['meno', 'poco']]
+
+        results["strengths"] = meaningful_strengths[:5]
+        results["areas_for_improvement"] = real_issues[:3]
 
         print("Analysis completed! ✅")
         return results
@@ -234,13 +329,19 @@ def main():
 
     # Strengths section
     print(f"\n💪 TOP STRENGTHS:")
-    for i, (strength, count) in enumerate(results['strengths'][:5], 1):
-        print(f"   {i}. {strength} (mentioned {count} times)")
+    if results['strengths']:
+        for i, (strength, count) in enumerate(results['strengths'][:5], 1):
+            print(f"   {i}. {strength} (mentioned {count} times)")
+    else:
+        print("   No specific strengths identified (check keyword extraction)")
 
     # Areas for improvement
     print(f"\n🎯 AREAS FOR IMPROVEMENT:")
-    for i, (issue, count) in enumerate(results['areas_for_improvement'][:3], 1):
-        print(f"   {i}. {issue} (mentioned {count} times)")
+    if results['areas_for_improvement']:
+        for i, (issue, count) in enumerate(results['areas_for_improvement'][:3], 1):
+            print(f"   {i}. {issue} (mentioned {count} times)")
+    else:
+        print("   No specific issues identified (check keyword extraction)")
 
     # Detailed reviews sample
     print(f"\n📝 SAMPLE DETAILED REVIEWS:")
