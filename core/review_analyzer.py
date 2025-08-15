@@ -28,6 +28,32 @@ OUTPUT FINALE - BUSINESS INTELLIGENCE:
 VALORE: Il sentiment da solo dice "82% positive". Con keywords sappiamo che
 "i clienti amano lo staff (15 menzioni) ma si lamentano della piscina affollata (5 menzioni)"
 → Azione concreta: gestire meglio accessi piscina in alta stagione
+
+Riassunto:
+
+1. Sentiment Analysis con LLM
+
+Modello: cardiffnlp/twitter-xlm-roberta-base-sentiment
+Analizza separatamente contenuto positivo e negativo
+Output: POSITIVE/NEGATIVE/NEUTRAL + confidence score
+
+2. Keyword Extraction con KeyBERT
+
+Modello: distilbert-base-multilingual-cased (via KeyBERT)
+Estrae keywords semanticamente significative dal testo
+Output: liste di keywords/phrases rilevanti
+
+3. Categorizzazione con Regex/Dictionary
+
+Non per verificare aspetti, ma per classificare le keywords
+Associa keywords a categorie business: staff_service, facilities, room_quality, etc.
+Keywords mapping: {'staff': ['staff', 'personale', 'servizio', ...]}
+
+4. Business Intelligence
+
+Combina sentiment + keywords + categories
+Conta menzioni per categoria
+Genera insights: "staff eccellente (9 menzioni positive)"
 """
 import re
 from collections import defaultdict, Counter
@@ -91,13 +117,10 @@ class BookingReviewAnalyzer:
 
         # Better sentiment mapping for hospitality context
         sentiment_map = {
-            'LABEL_0': 'Negative',  # Very negative becomes negative
-            'LABEL_1': 'Negative',  # Negative stays negative
-            'LABEL_2': 'Neutral',  # Neutral stays neutral
-            'POSITIVE': 'Positive',
-            'NEGATIVE': 'Negative'
+            'LABEL_0': 'Negative',
+            'LABEL_1': 'Neutral',
+            'LABEL_2': 'Positive'
         }
-
         raw_label = result[0]['label']
         sentiment = sentiment_map.get(raw_label, 'Positive')  # Default to positive for unknown
         confidence = round(result[0]['score'], 3)
