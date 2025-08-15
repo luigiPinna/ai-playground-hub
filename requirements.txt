@@ -4,3 +4,5 @@ diffusers
 accelerate
 pillow
 tiktoken
+sentencepiece
+sacremoses
