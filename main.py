@@ -1,6 +1,6 @@
-from sentiment_analyzer import SentimentAnalyzer
-from translator import Translator
-from image_generator import ImageGenerator
+from ai.sentiment_analyzer import SentimentAnalyzer
+from ai.translator import Translator
+from ai.image_generator import ImageGenerator
 
 
 def test_sentiment():

@@ -21,8 +21,8 @@ class ImageGenerator:
         self.pipeline = self.pipeline.to(self.device)
 
         # Create repo to save images
-        if not os.path.exists("generated_images"):
-            os.makedirs("generated_images")
+        if not os.path.exists("../generated_images"):
+            os.makedirs("../generated_images")
 
     def generate(self, prompt, num_images=1, guidance_scale=7.5, num_inference_steps=20):
         """generate images from prompt"""
